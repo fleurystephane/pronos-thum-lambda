@@ -3,6 +3,8 @@ package com.pronos.s3;
 import com.amazonaws.services.lambda.runtime.Context;
 import com.amazonaws.services.lambda.runtime.RequestHandler;
 import com.amazonaws.services.lambda.runtime.events.S3Event;
+import com.auth0.jwt.JWT;
+import com.auth0.jwt.algorithms.Algorithm;
 import jakarta.ws.rs.client.*;
 import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
@@ -18,6 +20,9 @@ import java.awt.*;
 import java.awt.image.BufferedImage;
 import java.io.*;
 import java.net.URL;
+import java.time.Instant;
+import java.time.temporal.ChronoUnit;
+import java.util.Date;
 import java.util.Objects;
 import java.util.UUID;
 import java.util.regex.Matcher;
@@ -27,8 +32,6 @@ import static com.pronos.s3.CommonUtility.*;
 
 public class ImagesPublicationsHandler implements RequestHandler<S3Event,String> {
     private static final String BUCKETNAME_DESTINATION = System.getenv("BUCKETNAME_DESTINATION");
-    private static final String TOKEN = "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJlbWFpbCI6ImxhbWJkYVMzQGV4YW1wbGUuY29tIn0.Wt1fxVemxwxzbE_PNvWGhqdFdTAtt1fKYbIgFjT8GJ4";
-    static String BEARER_TEC = "Bearer eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJlbWFpbCI6InRlY25pY2FsQGV4YW1wbGUuY29tIn0.Wt3KgNVlQKr7BR_Yhx9hHWh-oZjyf9luzkmOrXwjjow";
     static String EMAIL_TEC = "tecnical@example.com";
     public static final String PUBLIC_READ = "public-read";
     private static final boolean CALL_API = Boolean.parseBoolean(System.getenv("CALL_API"));
@@ -42,6 +45,17 @@ public class ImagesPublicationsHandler implements RequestHandler<S3Event,String>
             throw new RuntimeException(e);
         }
     }*/
+
+    public static String generateToken(String email, String userAgent){
+
+        return JWT.create()
+                .withClaim("email", email)
+                .withClaim("user-agent", userAgent)
+                .withIssuer(System.getenv("ISSUER"))
+                .withSubject(email)
+                .withExpiresAt(Date.from(Instant.now().plus(30, ChronoUnit.DAYS)))
+                .sign(Algorithm.HMAC256(System.getenv("SECRETKEY")));
+    }
 
     @Override
     public String handleRequest(S3Event s3Event, Context context) {
@@ -79,7 +93,7 @@ public class ImagesPublicationsHandler implements RequestHandler<S3Event,String>
                 picturesURLs.setKeythumb(keyThumb);
             }
 
-            if(!infos.isPublicPublicationExtracted) {
+            if(!infos.isPublicPublicationExtracted && !isVideo(imgExtension)) {
                 //2. Creation de l'image floutée
                 inputStream = getObject(s3client, bucketName, fileName);
                 BufferedImage imageOrigin = ImageIO.read(inputStream);
@@ -170,6 +184,13 @@ public class ImagesPublicationsHandler implements RequestHandler<S3Event,String>
         return getJsonKeysString(picturesURLs);
     }
 
+    private boolean isVideo(String imgExtension) {
+        return imgExtension.equals("mp4") ||
+                imgExtension.equals("mov") ||
+                imgExtension.equals("avi") ||
+                imgExtension.equals("wmv");
+    }
+
     public Response callRestService(String idPublication, PicturesURLs urLs) {
         Client client = ClientBuilder.newClient();
         WebTarget webTarget
@@ -179,7 +200,7 @@ public class ImagesPublicationsHandler implements RequestHandler<S3Event,String>
                 webTarget.path("/v1/publications/"+idPublication+"/transformedpictures");
         Invocation.Builder invocationBuilder
                 = picturesTarget.request(MediaType.APPLICATION_JSON)
-                .header("Authorization", BEARER_TEC)
+                .header("Authorization", "Bearer "+generateToken(EMAIL_TEC, "Tecnical"))
                 .header("email", EMAIL_TEC);
 
         return invocationBuilder
