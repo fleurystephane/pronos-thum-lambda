@@ -68,4 +68,15 @@ public class PicturesURLs {
     public void setNewkeyorigin(String newkeyorigin) {
         this.newkeyorigin = newkeyorigin;
     }
+
+    @Override
+    public String toString() {
+        return "PicturesURLs{" +
+                "keyorigin='" + keyorigin + '\'' +
+                ", newkeyorigin='" + newkeyorigin + '\'' +
+                ", keythumb='" + keythumb + '\'' +
+                ", keyblurred='" + keyblurred + '\'' +
+                ", keyblurredthumb='" + keyblurredthumb + '\'' +
+                '}';
+    }
 }
