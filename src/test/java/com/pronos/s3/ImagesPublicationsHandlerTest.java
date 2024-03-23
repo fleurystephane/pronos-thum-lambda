@@ -6,18 +6,12 @@ import org.jcodec.api.JCodecException;
 import org.jcodec.common.io.ByteBufferSeekableByteChannel;
 import org.jcodec.common.model.Picture;
 import org.jcodec.scale.AWTUtil;
-import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 
 import javax.imageio.ImageIO;
 import java.awt.image.BufferedImage;
 import java.io.*;
 import java.nio.ByteBuffer;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.util.Set;
-import java.util.stream.Collectors;
-import java.util.stream.Stream;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -26,58 +20,57 @@ class ImagesPublicationsHandlerTest {
     //@Test
     void callRestService() {
         ImagesPublicationsHandler handler = new ImagesPublicationsHandler();
+        ImagesPublicationsHandler.ExtractedInfo infos = handler.extractInfosFromFilenameNew("950d9a44-004e-47d4-ba07-f8586e2fceb2-P107-PUB");
         Response response = handler.callRestService(
-                "121212",
+                infos,
                 new PicturesURLs("A", "Aprime","B", "C", "D")
         );
         //Assertions.assertEquals(200, response.getStatus());
     }
 
     @Test
-    void testFilename(){
+    void testnewKey(){
         ImagesPublicationsHandler handler = new ImagesPublicationsHandler();
-        ImagesPublicationsHandler.ExtractedInfo info1 = handler.extractInfosFromFilename("33fd1sf1ds1f3sd1fd-188_PUB.jpeg");
-        assertEquals("188", info1.idPublicationExtracted);
-        assertFalse(info1.isFirstImage);
-        assertTrue(info1.isPublicPublicationExtracted);
-        ImagesPublicationsHandler.ExtractedInfo info2 = handler.extractInfosFromFilename("550e8400-e29b-41d4-a716-446655440000-188_PUB.jpeg");
-        assertEquals("188", info2.idPublicationExtracted);
-        assertFalse(info2.isFirstImage);
-        assertTrue(info2.isPublicPublicationExtracted);
-        ImagesPublicationsHandler.ExtractedInfo info3 = handler.extractInfosFromFilename("550e8400-e29b-41d4-a716-446655440000-188_PUBFIRST.jpeg");
-        assertEquals("188", info3.idPublicationExtracted);
-        assertTrue(info3.isFirstImage);
-        assertTrue(info3.isPublicPublicationExtracted);
-        ImagesPublicationsHandler.ExtractedInfo info4 = handler.extractInfosFromFilename("550e8400-e29b-41d4-a716-446655440000-188_PRIFIRST.jpeg");
-        assertEquals("188", info4.idPublicationExtracted);
-        assertTrue(info4.isFirstImage);
-        assertFalse(info4.isPublicPublicationExtracted);
-        ImagesPublicationsHandler.ExtractedInfo info5 = handler.extractInfosFromFilename("550e8400-e29b-41d4-a716-446655440000-188_PRI.jpeg");
-        assertEquals("188", info5.idPublicationExtracted);
-        assertFalse(info5.isFirstImage);
-        assertFalse(info5.isPublicPublicationExtracted);
+        ImagesPublicationsHandler.ExtractedInfo info1 = handler.extractInfosFromFilenameNew("950d9a44-004e-47d4-ba07-f8586e2fceb2-107-PUB");
+        assertEquals("107", info1.idExtracted);
+        assertTrue(info1.isPublic);
     }
 
     @Test
-    void testFirstFrame() throws JCodecException, IOException {
+    void testFilename(){
         ImagesPublicationsHandler handler = new ImagesPublicationsHandler();
-        File imageFile = new File(getClass().getResource("/video.AVI").getFile());
-        Picture pic = ImagesPublicationsHandler.getFrameFromFile(imageFile, 45);
-        assertNotNull(pic.getSize());
-        /*byte[] imageBytes = new byte[(int) imageFile.length()];
-        try (InputStream fis = imageFile.toURL().openStream()) {
-            fis.read(imageBytes);
-            byte[] res = handler.extractFirstFrame(fis, "test.mp4");
-            Assertions.assertTrue(res.length > 0);
-        } catch (IOException e) {
-            e.printStackTrace();
-        }*/
+        ImagesPublicationsHandler.ExtractedInfo info1 = handler.extractInfosFromFilenameNew("33fd1sf1ds1f3sd1fd-P188-PUB.jpeg");
+        assertEquals("188", info1.idExtracted);
+        assertEquals("P", info1.type);
+        assertFalse(info1.isFirstImage);
+        assertTrue(info1.isPublic);
+        ImagesPublicationsHandler.ExtractedInfo info2 = handler.extractInfosFromFilenameNew("550e8400-e29b-41d4-a716-446655440000-P188-PUB.jpeg");
+        assertEquals("188", info2.idExtracted);
+        assertFalse(info2.isFirstImage);
+        assertTrue(info2.isPublic);
+        ImagesPublicationsHandler.ExtractedInfo info3 = handler.extractInfosFromFilenameNew("550e8400-e29b-41d4-a716-446655440000-P188-PUBFIRST.jpeg");
+        assertEquals("188", info3.idExtracted);
+        assertTrue(info3.isFirstImage);
+        assertTrue(info3.isPublic);
+        ImagesPublicationsHandler.ExtractedInfo info4 = handler.extractInfosFromFilenameNew("550e8400-e29b-41d4-a716-446655440000-P188-PRIFIRST.jpeg");
+        assertEquals("188", info4.idExtracted);
+        assertTrue(info4.isFirstImage);
+        assertFalse(info4.isPublic);
+        ImagesPublicationsHandler.ExtractedInfo info5 = handler.extractInfosFromFilenameNew("550e8400-e29b-41d4-a716-446655440000-P188-PRI.jpeg");
+        assertEquals("188", info5.idExtracted);
+        assertFalse(info5.isFirstImage);
+        assertFalse(info5.isPublic);
     }
 
-    public static void main(String[] args) throws JCodecException, IOException {
-        InputStream input = new FileInputStream("src/test/resources/opentdi.mp4");
-        grab(input);
-        input.close();
+    @Test
+    void testFilenameNew(){
+        ImagesPublicationsHandler h = new ImagesPublicationsHandler();
+        ImagesPublicationsHandler.ExtractedInfo res1 = h.extractInfosFromFilenameNew("fqzfkgfeuygf213213-C13233-FIRST.png");
+        assertEquals("13233", res1.idExtracted);
+        assertEquals("C", res1.type);
+        ImagesPublicationsHandler.ExtractedInfo res2 = h.extractInfosFromFilenameNew("fqzfkgfeuygf213213-P234-NUL.png");
+        assertEquals("234", res2.idExtracted);
+        assertEquals("P", res2.type);
     }
 
     private static void grab(InputStream inputStream) throws IOException, JCodecException {

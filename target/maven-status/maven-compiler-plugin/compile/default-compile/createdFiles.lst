@@ -1,6 +1,0 @@
-org/example/Main.class
-com/pronos/s3/PicturesURLs.class
-com/pronos/s3/CommonUtility.class
-com/pronos/s3/S3ObjectBucketDeletionHandler.class
-com/pronos/s3/ImagesPublicationsHandler.class
-com/pronos/s3/ImagesPublicationsHandler$ExtractedInfo.class
