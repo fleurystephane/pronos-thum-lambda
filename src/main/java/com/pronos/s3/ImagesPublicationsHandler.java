@@ -77,6 +77,15 @@ public class ImagesPublicationsHandler implements RequestHandler<S3Event,String>
             InputStream inputStream = getObject(s3client, bucketName, fileName);
             context.getLogger().log("Objet " + fileName + " bien récupéré depuis " + bucketName);
 
+            BufferedImage imageOrigin = null;
+            if(!isVideo(imgExtension)){
+                imageOrigin = ImageIO.read(inputStream);
+                if(imageOrigin != null){
+                    infos.width = imageOrigin.getWidth();
+                    infos.height = imageOrigin.getHeight();
+                }
+            }
+
             //On crée l'image de la vidéo, cette image ne sera pas envoyée à l'appli via API mais sera stockée dans le Bucket
             if (isVideo(imgExtension)) {
                 /*try {
@@ -104,11 +113,8 @@ public class ImagesPublicationsHandler implements RequestHandler<S3Event,String>
                 }
 
                 if (!infos.isPublic) {
-                    if (infos.isFirstImage) {
-                        inputStream = getObject(s3client, bucketName, fileName);
-                    }
                     //2. Creation de l'image floutée
-                    BufferedImage imageOrigin = ImageIO.read(inputStream);
+                    //BufferedImage imageOrigin = ImageIO.read(inputStream);
                     BufferedImage imageBlurred = CommonUtility.getBufferedImageFlou(imageOrigin);
 
                     String keyLocked = buildImgFlouttee(context, imgExtension, s3client,
@@ -119,7 +125,8 @@ public class ImagesPublicationsHandler implements RequestHandler<S3Event,String>
                     if (infos.isFirstImage) {
                         //3. Creation de la vignette de l'image flouttée
                         InputStream thumbnailLockedInputStream =
-                                createThumbnail(bufferedImageToInputStream(imageBlurred, imgExtension));
+                                createSizedImage(bufferedImageToInputStream(imageBlurred, imgExtension),
+                                        100,100);
 
                         byte[] imgBlurredThumbBytesArray = buildBAOS(thumbnailLockedInputStream).toByteArray();
                         String keyThumbLocked = saveImageToS3(s3client,
@@ -178,7 +185,7 @@ public class ImagesPublicationsHandler implements RequestHandler<S3Event,String>
         }
 
         callInfos(picturesURLs.toString(), true, context);
-        return getJsonKeysString(picturesURLs);
+        return getJsonKeysString(picturesURLs, infos.width, infos.height);
 
     }
 
@@ -251,7 +258,8 @@ public class ImagesPublicationsHandler implements RequestHandler<S3Event,String>
             if(infos.isFirstImage) {
                 //3. Creation de la vignette de l'image flouttée
                 InputStream thumbnailLockedInputStream =
-                        createThumbnail(bufferedImageToInputStream(imageBlurred, imgExtension));
+                        createSizedImage(bufferedImageToInputStream(imageBlurred, imgExtension),
+                                100,100);
 
                 byte[] imgBlurredThumbBytesArray = buildBAOS(thumbnailLockedInputStream).toByteArray();
                 String keyThumbLocked = saveImageToS3(s3client,
@@ -288,7 +296,7 @@ public class ImagesPublicationsHandler implements RequestHandler<S3Event,String>
         //1. Creation de la vignette et stockage dans le bucket destination
         context.getLogger().log("Creation d'une vignette pour " + fileName);
         // Créer la vignette de l'image SSI filename se termine par FIRST
-        InputStream thumbnailInputStream = createThumbnail(inputStream);
+        InputStream thumbnailInputStream = createSizedImage(inputStream, 100, 100);
         context.getLogger().log("thumbnailInputStream bien créé");
 
         // Sauvegarder la vignette dans S3
@@ -404,17 +412,19 @@ public class ImagesPublicationsHandler implements RequestHandler<S3Event,String>
                 .header("email", EMAIL_TEC);
 
         return invocationBuilder
-                .put(Entity.entity(getJsonKeysString(urLs), MediaType.APPLICATION_JSON));
+                .put(Entity.entity(getJsonKeysString(urLs,infos.width, infos.height), MediaType.APPLICATION_JSON));
     }
 
-    private static String getJsonKeysString(PicturesURLs urLs) {
+    private static String getJsonKeysString(PicturesURLs urLs,int width,int height) {
         String json = "{\"keyorigin\":\"" +
                 urLs.getKeyorigin() + "\"," +
                 "\"newkeyorigin\":\"" +
                 urLs.getNewkeyorigin() + "\"," +
                 "\"keythumb\":\"" + urLs.getKeythumb() + "\"," +
                 "\"keyblurred\":\"" + urLs.getKeyblurred() + "\"," +
-                "\"keyblurredthumb\":\"" + urLs.getKeyblurredthumb() + "\"}";
+                "\"keyblurredthumb\":\"" + urLs.getKeyblurredthumb() + "\"," +
+                "\"width\":"+width +"," +
+                "\"height\":"+height+"}";
         return json;
     }
 
@@ -446,6 +456,9 @@ public class ImagesPublicationsHandler implements RequestHandler<S3Event,String>
         boolean isPublic;
         boolean isFirstImage;
         String type;
+
+        int width;
+        int height;
     }
 
     private String getNewKey(String id, String extension, String suffix) {
@@ -453,13 +466,14 @@ public class ImagesPublicationsHandler implements RequestHandler<S3Event,String>
     }
 
     // Méthode pour créer une vignette d'une image
-    private static InputStream createThumbnail(InputStream inputStream) throws IOException {
+    private static InputStream createSizedImage(InputStream inputStream, int width, int height) throws IOException {
         ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
         Thumbnails.of(inputStream)
-                .size(100, 100)
+                .size(width, height)
                 .toOutputStream(outputStream);
         return new ByteArrayInputStream(outputStream.toByteArray());
     }
+
 
     // Méthode pour sauvegarder la vignette dans S3
     private String saveImageToS3(S3Client s3Client,
