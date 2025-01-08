@@ -148,7 +148,8 @@ public class ImagesPublicationsHandler implements RequestHandler<S3Event,String>
         return picturesURLs;
     }
 
-    public BufferedImage resizeImage(InputStream inputStream, int targetWidth, int targetHeight) throws IOException {
+    public BufferedImage resizeImage(InputStream inputStream, int targetWidth,
+                                     Context context) throws IOException {
         // Charger l'image d'origine
         BufferedImage originalImage = ImageIO.read(inputStream);
         if (originalImage == null) {
@@ -158,23 +159,19 @@ public class ImagesPublicationsHandler implements RequestHandler<S3Event,String>
         // Dimensions d'origine
         int originalWidth = originalImage.getWidth();
         int originalHeight = originalImage.getHeight();
+        // Calcul de la targetHeight pour respecter l'aspect ratio
+        double aspectRatio = (double) originalHeight / originalWidth;
+        int targetHeight = (int) (targetWidth * aspectRatio);
 
-        // Calcul des proportions pour respecter l'aspect ratio
-        double widthScale = (double) targetWidth / originalWidth;
-        double heightScale = (double) targetHeight / originalHeight;
-        double scale = Math.min(widthScale, heightScale); // Choix du plus petit facteur de réduction
-
-        int scaledWidth = (int) (originalWidth * scale);
-        int scaledHeight = (int) (originalHeight * scale);
 
         // Création de l'image redimensionnée
-        BufferedImage resizedImage = new BufferedImage(scaledWidth, scaledHeight, originalImage.getType());
+        BufferedImage resizedImage = new BufferedImage(targetWidth, targetHeight, BufferedImage.TYPE_INT_RGB);
         Graphics2D g = resizedImage.createGraphics();
 
         try {
             // Amélioration de la qualité avec l'interpolation bilinéaire
             g.setRenderingHint(java.awt.RenderingHints.KEY_INTERPOLATION, java.awt.RenderingHints.VALUE_INTERPOLATION_BILINEAR);
-            g.drawImage(originalImage.getScaledInstance(scaledWidth, scaledHeight, Image.SCALE_SMOOTH), 0, 0, null);
+            g.drawImage(originalImage.getScaledInstance(targetWidth, targetHeight, Image.SCALE_SMOOTH), 0, 0, null);
         } finally {
             g.dispose(); // Libérer les ressources
         }
@@ -195,10 +192,10 @@ public class ImagesPublicationsHandler implements RequestHandler<S3Event,String>
         InputStream inputStream = getObject(s3client, bucketName, fileName);
         context.getLogger().log("Image " + fileName + " bien récupérée depuis " + bucketName);
 
-        BufferedImage imageOrigin = resizeImage(inputStream, 800, 600);
+        BufferedImage imageOrigin = resizeImage(inputStream, 1170, context);
         inputStream.close();
-        infos.width = 800;
-        infos.height = 600;
+        infos.width = 1170;
+        infos.height = imageOrigin.getHeight();
 
 
         //Si 1ere image alors on doit créer une vignette
@@ -241,8 +238,9 @@ public class ImagesPublicationsHandler implements RequestHandler<S3Event,String>
                 context.getLogger().log("Attention retour du service des Keys : " + resultat.getStatus());
             } else {
                 context.getLogger().log("Service des keys retour OK  !!!");
+                context.getLogger().log("le fichier d'origine : "+fileName);
                 //6. Suppression de l'image du bucket d'origine
-                removeObject(context, bucketName, fileName, s3client);
+                //removeObject(context, bucketName, fileName, s3client);
 
             }
         }
