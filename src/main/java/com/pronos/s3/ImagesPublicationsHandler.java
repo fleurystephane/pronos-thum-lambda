@@ -58,9 +58,8 @@ public class ImagesPublicationsHandler implements RequestHandler<S3Event,String>
 
     @Override
     public String handleRequest(S3Event s3Event, Context context) {
-        String bucketName = s3Event.getRecords().get(0).getS3().getBucket().getName();
         String fileName = s3Event.getRecords().get(0).getS3().getObject().getKey();
-        String imgExtension = fileName.substring(fileName.lastIndexOf('.') + 1);
+        String fileExtension = fileName.substring(fileName.lastIndexOf('.') + 1);
         ExtractedInfo infos = extractInfosFromFilenameNew(fileName);
         if (null == infos) {
             callInfos(ERROR_A, false,
@@ -69,124 +68,201 @@ public class ImagesPublicationsHandler implements RequestHandler<S3Event,String>
         }
         context.getLogger().log("id recupéré pour le nouveau media : " + infos.idExtracted);
 
+        try {
+            PicturesURLs picturesURLs = getInfosToCall(s3Event, context, infos, fileName, fileExtension);
+            callInfos(picturesURLs.toString(), true, context);
+            return getJsonKeysString(picturesURLs, infos.width, infos.height);
+        }catch(IOException e){
+            callInfos("IOException : " + e.getMessage(), false, context);
+            return "Error while reading file from S3 :::" + e.getMessage();
+        }
+
+    }
+
+    private PicturesURLs getInfosToCallForVideo(S3Event s3Event, Context context, ExtractedInfo infos,
+                                        String fileName, String fileExtension) throws IOException {
+        String bucketName = s3Event.getRecords().get(0).getS3().getBucket().getName();
+
         PicturesURLs picturesURLs = new PicturesURLs();
 
-        String newKeyOrigin = getNewKey(infos.idExtracted, imgExtension, "");
+        String newKeyOrigin = getNewKey(infos.idExtracted, fileExtension, "");
 
-        try (S3Client s3client = S3Client.builder().build()) {
-            InputStream inputStream = getObject(s3client, bucketName, fileName);
-            context.getLogger().log("Objet " + fileName + " bien récupéré depuis " + bucketName);
+        S3Client s3client = S3Client.builder().build();
+        InputStream inputStream = getObject(s3client, bucketName, fileName);
+        context.getLogger().log("Video " + fileName + " bien récupéré depuis " + bucketName);
 
-            BufferedImage imageOrigin = null;
-            if(!isVideo(imgExtension)){
-                imageOrigin = ImageIO.read(inputStream);
-                if(imageOrigin != null){
-                    infos.width = imageOrigin.getWidth();
-                    infos.height = imageOrigin.getHeight();
-                }
-            }
+        BufferedImage imageOrigin = null;
 
-            //On crée l'image de la vidéo, cette image ne sera pas envoyée à l'appli via API mais sera stockée dans le Bucket
-            if (isVideo(imgExtension)) {
-                /*try {
-                    manageVideo(context, inputStream, fileName, s3client, infos, picturesURLs, imgExtension, newKeyOrigin);
+        //On crée l'image de la vidéo, cette image ne sera pas envoyée à l'appli via API mais sera stockée dans le Bucket
+        /*try {
+                    manageVideo(context, inputStream, fileName, s3client, infos, picturesURLs, fileExtension, newKeyOrigin);
                 } catch (JCodecException e) {
                     context.getLogger().log("Error JCodeException : "+e.getMessage());
                     removeObject(context, bucketName, fileName, s3client);
                     callInfos("Error... JCodecException "+e.getMessage(), false, context);
                     return "Error... JCodecException";
                 }*/
-                if (!infos.isPublic) {
-                    picturesURLs.setKeyblurred("DEFAULT_URL");
-                }
-            } else {//IMAGE
-                //Si 1ere image alors on doit créer une vignette
-                if (infos.isFirstImage) {
-                    String key = getNewKey(infos.idExtracted, imgExtension,
-                            "thumb");
-                    String keyThumb = buildKeyThumb(context, fileName, s3client, inputStream, key);
-
-                    context.getLogger().log("Vignette créée : " + keyThumb);
-                    picturesURLs.setKeythumb(keyThumb);
-                    inputStream.close();
-                    inputStream = null;
-                }
-
-                if (!infos.isPublic) {
-                    //2. Creation de l'image floutée
-                    //BufferedImage imageOrigin = ImageIO.read(inputStream);
-                    BufferedImage imageBlurred = CommonUtility.getBufferedImageFlou(imageOrigin);
-
-                    String keyLocked = buildImgFlouttee(context, imgExtension, s3client,
-                            imageBlurred, getNewKey(infos.idExtracted, imgExtension, "locked"));
-                    context.getLogger().log("Image flouttée créée : " + keyLocked);
-                    picturesURLs.setKeyblurred(keyLocked);
-
-                    if (infos.isFirstImage) {
-                        //3. Creation de la vignette de l'image flouttée
-                        InputStream thumbnailLockedInputStream =
-                                createSizedImage(bufferedImageToInputStream(imageBlurred, imgExtension),
-                                        100,100);
-
-                        byte[] imgBlurredThumbBytesArray = buildBAOS(thumbnailLockedInputStream).toByteArray();
-                        String keyThumbLocked = saveImageToS3(s3client,
-                                getNewKey(infos.idExtracted, imgExtension,
-                                        "thumblocked"), imgBlurredThumbBytesArray, context);
-
-                        context.getLogger().log("Vignette flouttée créée : " + keyThumbLocked);
-                        picturesURLs.setKeyblurredthumb(keyThumbLocked);
-                    }
-                }
-            }
-
-
-            //4. Copie de l'image d'origine vers le bucket destination
-
-            CopyObjectRequest copyObjectRequest = CopyObjectRequest.builder()
-                    .copySource(bucketName + "/" + fileName)
-                    .destinationBucket(BUCKETNAME_DESTINATION)
-                    .destinationKey(newKeyOrigin)
-                    .acl(PUBLIC_READ)
-                    .build();
-
-            CopyObjectResponse copyObjectResponse = s3client.copyObject(copyObjectRequest);
-            HeadObjectRequest sourceHeadRequest = HeadObjectRequest.builder()
-                    .bucket(bucketName)
-                    .key(fileName)
-                    .build();
-            if (s3client.headObject(sourceHeadRequest).eTag().equals(
-                    copyObjectResponse.copyObjectResult().eTag())) {
-                //5. Mise à jour de la publication avec les clés des images
-                URL newKeyOriginUrl = s3client.utilities().getUrl(
-                        builder -> builder.bucket(
-                                ImagesPublicationsHandler.BUCKETNAME_DESTINATION).key(newKeyOrigin).build());
-                picturesURLs.setKeyorigin(fileName.substring(0, fileName.lastIndexOf(".")));
-                picturesURLs.setNewkeyorigin(newKeyOriginUrl.toString());
-                if (CALL_API) {
-                    Response resultat = callRestService(infos, picturesURLs);
-
-                    if (resultat.getStatus() != Response.Status.OK.getStatusCode()) {
-                        context.getLogger().log("Attention retour du service des Keys : " + resultat.getStatus());
-                    } else {
-                        context.getLogger().log("Service des keys retour OK  !!!");
-                        //6. Suppression de l'image du bucket d'origine
-                        removeObject(context, bucketName, fileName, s3client);
-
-                    }
-                }
-            } else {
-                context.getLogger().log("/!\\ les etags sont differents donc pas d'appel API pour mise à jour des keys!!!!");
-                context.getLogger().log("s3client.headObject(sourceHeadRequest).eTag() = " + s3client.headObject(sourceHeadRequest).eTag());
-                context.getLogger().log("copyObjectResponse.copyObjectResult().eTag() = " + copyObjectResponse.copyObjectResult().eTag());
-            }
-        } catch (IOException e) {
-            callInfos("IOException : " + e.getMessage(), false, context);
-            return "Error while reading file from S3 :::" + e.getMessage();
+        if (!infos.isPublic) {
+            picturesURLs.setKeyblurred("DEFAULT_URL");
         }
 
-        callInfos(picturesURLs.toString(), true, context);
-        return getJsonKeysString(picturesURLs, infos.width, infos.height);
 
+        //4. Copie de la video d'origine vers le bucket destination
+
+        CopyObjectRequest copyObjectRequest = CopyObjectRequest.builder()
+                .copySource(bucketName + "/" + fileName)
+                .destinationBucket(BUCKETNAME_DESTINATION)
+                .destinationKey(newKeyOrigin)
+                .acl(PUBLIC_READ)
+                .build();
+
+        CopyObjectResponse copyObjectResponse = s3client.copyObject(copyObjectRequest);
+        HeadObjectRequest sourceHeadRequest = HeadObjectRequest.builder()
+                .bucket(bucketName)
+                .key(fileName)
+                .build();
+        if (s3client.headObject(sourceHeadRequest).eTag().equals(
+                copyObjectResponse.copyObjectResult().eTag())) {
+            //5. Mise à jour de la publication avec les clés des images
+            URL newKeyOriginUrl = s3client.utilities().getUrl(
+                    builder -> builder.bucket(
+                            ImagesPublicationsHandler.BUCKETNAME_DESTINATION).key(newKeyOrigin).build());
+            picturesURLs.setKeyorigin(fileName.substring(0, fileName.lastIndexOf(".")));
+            picturesURLs.setNewkeyorigin(newKeyOriginUrl.toString());
+            if (CALL_API) {
+                Response resultat = callRestService(infos, picturesURLs);
+
+                if (resultat.getStatus() != Response.Status.OK.getStatusCode()) {
+                    context.getLogger().log("Attention retour du service des Keys : " + resultat.getStatus());
+                } else {
+                    context.getLogger().log("Service des keys retour OK  !!!");
+                    //6. Suppression de l'image du bucket d'origine
+                    removeObject(context, bucketName, fileName, s3client);
+                }
+            }
+        } else {
+            context.getLogger().log("/!\\ les etags de la copie de la video sont differents donc pas d'appel API pour mise à jour des keys!!!!");
+            context.getLogger().log("s3client.headObject(sourceHeadRequest).eTag() = " + s3client.headObject(sourceHeadRequest).eTag());
+            context.getLogger().log("copyObjectResponse.copyObjectResult().eTag() = " + copyObjectResponse.copyObjectResult().eTag());
+        }
+        return picturesURLs;
+    }
+
+    public BufferedImage resizeImage(InputStream inputStream, int targetWidth, int targetHeight) throws IOException {
+        // Charger l'image d'origine
+        BufferedImage originalImage = ImageIO.read(inputStream);
+        if (originalImage == null) {
+            throw new IOException("L'image d'entrée est invalide ou non supportée.");
+        }
+
+        // Dimensions d'origine
+        int originalWidth = originalImage.getWidth();
+        int originalHeight = originalImage.getHeight();
+
+        // Calcul des proportions pour respecter l'aspect ratio
+        double widthScale = (double) targetWidth / originalWidth;
+        double heightScale = (double) targetHeight / originalHeight;
+        double scale = Math.min(widthScale, heightScale); // Choix du plus petit facteur de réduction
+
+        int scaledWidth = (int) (originalWidth * scale);
+        int scaledHeight = (int) (originalHeight * scale);
+
+        // Création de l'image redimensionnée
+        BufferedImage resizedImage = new BufferedImage(scaledWidth, scaledHeight, originalImage.getType());
+        Graphics2D g = resizedImage.createGraphics();
+
+        try {
+            // Amélioration de la qualité avec l'interpolation bilinéaire
+            g.setRenderingHint(java.awt.RenderingHints.KEY_INTERPOLATION, java.awt.RenderingHints.VALUE_INTERPOLATION_BILINEAR);
+            g.drawImage(originalImage.getScaledInstance(scaledWidth, scaledHeight, Image.SCALE_SMOOTH), 0, 0, null);
+        } finally {
+            g.dispose(); // Libérer les ressources
+        }
+
+        return resizedImage;
+    }
+
+
+    private PicturesURLs getInfosToCallForPicture(S3Event s3Event, Context context, ExtractedInfo infos,
+                                        String fileName, String fileExtension) throws IOException {
+        String bucketName = s3Event.getRecords().get(0).getS3().getBucket().getName();
+
+        PicturesURLs picturesURLs = new PicturesURLs();
+
+        String newKeyOrigin = getNewKey(infos.idExtracted, fileExtension, "");
+
+        S3Client s3client = S3Client.builder().build();
+        InputStream inputStream = getObject(s3client, bucketName, fileName);
+        context.getLogger().log("Image " + fileName + " bien récupérée depuis " + bucketName);
+
+        BufferedImage imageOrigin = resizeImage(inputStream, 800, 600);
+        inputStream.close();
+        infos.width = 800;
+        infos.height = 600;
+
+
+        //Si 1ere image alors on doit créer une vignette
+        if (infos.isFirstImage) {
+            String key = getNewKey(infos.idExtracted, fileExtension,
+                    "thumb");
+            String keyThumb = buildKeyThumb(context, fileName, s3client, imageOrigin, key);
+
+            context.getLogger().log("Vignette créée : " + keyThumb);
+            picturesURLs.setKeythumb(keyThumb);
+        }
+
+        if (!infos.isPublic) {
+            //2. Creation de l'image floutée
+            BufferedImage imageBlurred = CommonUtility.getBufferedImageFlou(imageOrigin);
+
+            String keyLocked = buildImgFlouttee(context, fileExtension, s3client,
+                    imageBlurred, getNewKey(infos.idExtracted, fileExtension, "locked"));
+            context.getLogger().log("Image flouttée créée : " + keyLocked);
+            picturesURLs.setKeyblurred(keyLocked);
+
+            if (infos.isFirstImage) {
+                //3. Creation de la vignette de l'image flouttée
+                String keyThumbLocked = buildKeyThumb(context, fileName, s3client, imageOrigin,
+                        getNewKey(infos.idExtracted, fileExtension,
+                                "thumblocked"));
+                context.getLogger().log("Vignette flouttée créée : " + keyThumbLocked);
+                picturesURLs.setKeyblurredthumb(keyThumbLocked);
+            }
+        }
+
+        picturesURLs.setKeyorigin(fileName.substring(0, fileName.lastIndexOf(".")));
+        picturesURLs.setNewkeyorigin(saveImageToS3(s3client, newKeyOrigin,
+                convertBufferedImageToByteArray(imageOrigin, fileExtension), context));
+
+        if (CALL_API) {
+            Response resultat = callRestService(infos, picturesURLs);
+
+            if (resultat.getStatus() != Response.Status.OK.getStatusCode()) {
+                context.getLogger().log("Attention retour du service des Keys : " + resultat.getStatus());
+            } else {
+                context.getLogger().log("Service des keys retour OK  !!!");
+                //6. Suppression de l'image du bucket d'origine
+                removeObject(context, bucketName, fileName, s3client);
+
+            }
+        }
+
+        return picturesURLs;
+    }
+
+    public static byte[] convertBufferedImageToByteArray(BufferedImage image, String format) throws IOException {
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        ImageIO.write(image, format, baos);
+        baos.flush();
+        return baos.toByteArray();
+    }
+
+    private PicturesURLs getInfosToCall(S3Event s3Event, Context context, ExtractedInfo infos,
+                                        String fileName, String fileExtension) throws IOException {
+        if(isVideo(fileExtension)){
+            return getInfosToCallForVideo(s3Event,context,infos,fileName,fileExtension);
+        }
+        return getInfosToCallForPicture(s3Event,context,infos,fileName,fileExtension);
     }
 
     private boolean isContentExMedia(String fileName) {
@@ -226,7 +302,7 @@ public class ImagesPublicationsHandler implements RequestHandler<S3Event,String>
         }
     }
 
-    public void manageVideo(Context context, InputStream inputStream, String fileName, S3Client s3client,
+    /*public void manageVideo(Context context, InputStream inputStream, String fileName, S3Client s3client,
                             ExtractedInfo infos, PicturesURLs picturesURLs, String imgExtension, String newKey) throws IOException, JCodecException {
         context.getLogger().log("Video, on extrait une frame de "+fileName);
         //byte[] firstFrameBytes = extractFirstFrame(inputStream, fileName);
@@ -290,22 +366,27 @@ public class ImagesPublicationsHandler implements RequestHandler<S3Event,String>
         int dotIndex = fileName.lastIndexOf('.');
         String baseName = fileName.substring(0, dotIndex);
         return baseName+"thumblocked.jpg";
-    }
+    }*/
 
-    private String buildKeyThumb(Context context, String fileName, S3Client s3client, InputStream inputStream, String key) throws IOException {
-        //1. Creation de la vignette et stockage dans le bucket destination
-        context.getLogger().log("Creation d'une vignette pour " + fileName);
-        // Créer la vignette de l'image SSI filename se termine par FIRST
-        InputStream thumbnailInputStream = createSizedImage(inputStream, 100, 100);
-        context.getLogger().log("thumbnailInputStream bien créé");
+    private String buildKeyThumb(Context context, String fileName, S3Client s3client, BufferedImage originalImage, String key) throws IOException {
+        // 1. Création de la vignette à partir de l'image d'origine
+        context.getLogger().log("Création d'une vignette pour " + fileName);
+
+        // Créer une vignette de l'image
+        BufferedImage thumbnailImage = createSizedBufferedImage(originalImage, 100, 100);
+        context.getLogger().log("Thumbnail bien créé");
+
+        // Convertir la vignette en tableau d'octets
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        ImageIO.write(thumbnailImage, "jpg", baos);
+        byte[] imgThumbnailBytesArray = baos.toByteArray();
 
         // Sauvegarder la vignette dans S3
         context.getLogger().log("Tentative de sauvegarde dans le bucket " + BUCKETNAME_DESTINATION);
 
-        byte[] imgOrginThumbBytesArray = buildBAOS(thumbnailInputStream).toByteArray();
-        return saveImageToS3(s3client,
-                key, imgOrginThumbBytesArray, context);
+        return saveImageToS3(s3client, key, imgThumbnailBytesArray, context);
     }
+
 
     private String buildImgFlouttee(Context context, String imgExtension, S3Client s3client,
                                     BufferedImage imageBlurred, String key) throws IOException {
@@ -315,77 +396,6 @@ public class ImagesPublicationsHandler implements RequestHandler<S3Event,String>
                 bufferedImageToByteArray(imageBlurred,
                         imgExtension), context
         );
-    }
-
-    public byte[] extractFirstFrame(InputStream video, String filename) throws IOException {
-
-        int frameNumber = 42;
-        try (ByteArrayOutputStream baos = new ByteArrayOutputStream()){
-            Picture picture = FrameGrab.getFrameFromFile(
-                    convertInputStreamToFile(video, filename), frameNumber);
-            BufferedImage bufferedImage = org.jcodec.scale.AWTUtil.toBufferedImage(picture);
-
-            ImageIO.write(bufferedImage, "jpg", baos);
-            baos.flush();
-            return baos.toByteArray();
-        } catch (IOException | JCodecException e) {
-            throw new RuntimeException(e);
-        }
-    }
-
-    public byte[] extractFirstFrameBis(InputStream video) throws IOException, JCodecException {
-
-        final ByteBuffer byteBuffer = readInputStreamToByteBuffer(video);
-        final ByteBufferSeekableByteChannel byteChannel =
-                new ByteBufferSeekableByteChannel(byteBuffer, byteBuffer.limit());
-        Picture pic = FrameGrab.getFrameFromChannel(byteChannel, 42);
-        // Convertir la Picture en BufferedImage
-        BufferedImage image = AWTUtil.toBufferedImage(pic);
-        ByteArrayOutputStream baos = new ByteArrayOutputStream();
-        ImageIO.write(image, "jpg", baos);
-        baos.flush();
-        byte[] byteArray = baos.toByteArray();
-        baos.close();
-
-        return byteArray;
-    }
-
-    private static ByteBuffer readInputStreamToByteBuffer(InputStream inputStream) throws IOException {
-        int bufferSize = 131072; // Taille du tampon
-        byte[] buffer = new byte[bufferSize];
-        int bytesRead;
-        ByteBuffer byteBuffer = ByteBuffer.allocate(0); // Commence avec une allocation de taille 0
-
-        while ((bytesRead = inputStream.read(buffer)) != -1) {
-            // Agrandir le ByteBuffer en fonction de la taille lue
-            byteBuffer = growByteBuffer(byteBuffer, bytesRead);
-            byteBuffer.put(buffer, 0, bytesRead);
-        }
-
-        byteBuffer.flip(); // Prepare le ByteBuffer pour la lecture ulterieure
-        return byteBuffer;
-    }
-
-    private static ByteBuffer growByteBuffer(ByteBuffer byteBuffer, int additionalSize) {
-        int newSize = byteBuffer.capacity() + additionalSize;
-        if (newSize > byteBuffer.capacity()) {
-            ByteBuffer newByteBuffer = ByteBuffer.allocate(newSize);
-            byteBuffer.flip();
-            newByteBuffer.put(byteBuffer);
-            return newByteBuffer;
-        } else {
-            return byteBuffer;
-        }
-    }
-
-    public static Picture getFrameFromFile(File file, int frameNumber) throws IOException, JCodecException {
-        FileChannelWrapper ch = null;
-        try {
-            ch = NIOUtils.readableChannel(file);
-            return FrameGrab.createFrameGrab(ch).seekToFramePrecise(frameNumber).getNativeFrame();
-        } finally {
-            NIOUtils.closeQuietly(ch);
-        }
     }
 
 
@@ -473,9 +483,15 @@ public class ImagesPublicationsHandler implements RequestHandler<S3Event,String>
                 .toOutputStream(outputStream);
         return new ByteArrayInputStream(outputStream.toByteArray());
     }
+    private static BufferedImage createSizedBufferedImage(BufferedImage originalImage, int width, int height) throws IOException {
+        return Thumbnails.of(originalImage)
+                .size(width, height)
+                .asBufferedImage();
+    }
 
 
-    // Méthode pour sauvegarder la vignette dans S3
+
+    // Méthode pour sauvegarder une image dans S3
     private String saveImageToS3(S3Client s3Client,
                                  String newImageKey,
                                  byte[] bytes, Context context) throws IOException {
@@ -505,54 +521,4 @@ public class ImagesPublicationsHandler implements RequestHandler<S3Event,String>
                 .build();
         return s3Client.getObject(getObjectRequest);
     }
-
-    private long calculateInputStreamSize(InputStream inputStream) throws IOException {
-        byte[] buffer = new byte[4096];
-        long sizeInBytes = 0;
-
-        int bytesRead;
-        while ((bytesRead = inputStream.read(buffer)) != -1) {
-            sizeInBytes += bytesRead;
-        }
-
-        return sizeInBytes;
-    }
-
-    private BufferedImage addLockToImage(BufferedImage mainImage, BufferedImage lockImage) {
-        int mainImageWidth = mainImage.getWidth();
-        int mainImageHeight = mainImage.getHeight();
-
-        int lockImageWidth = lockImage.getWidth();
-        int lockImageHeight = lockImage.getHeight();
-
-        // Calculer les coordonnées pour placer l'image du cadenas au centre de l'image principale
-        int x = (mainImageWidth - lockImageWidth) / 2;
-        int y = (mainImageHeight - lockImageHeight) / 2;
-
-        // Créer une image résultante en copiant l'image principale
-        BufferedImage resultImage = new BufferedImage(mainImageWidth, mainImageHeight, BufferedImage.TYPE_INT_RGB);
-        Graphics2D graphics = resultImage.createGraphics();
-        graphics.drawImage(mainImage, 0, 0, null);
-
-        // Dessiner l'image du cadenas au centre de image principale
-        graphics.drawImage(lockImage, x, y, null);
-
-        graphics.dispose();
-
-        return resultImage;
-    }
-
-    public File convertInputStreamToFile(InputStream inputStream, String fileName) throws IOException {
-        Path tempFilePath = Files.createTempFile(fileName, ".tmp");
-
-        try (FileOutputStream outputStream = new FileOutputStream(tempFilePath.toFile())) {
-            byte[] buffer = new byte[1024];
-            int bytesRead;
-            while ((bytesRead = inputStream.read(buffer)) != -1) {
-                outputStream.write(buffer, 0, bytesRead);
-            }
-        }
-        return tempFilePath.toFile();
-    }
-
 }
