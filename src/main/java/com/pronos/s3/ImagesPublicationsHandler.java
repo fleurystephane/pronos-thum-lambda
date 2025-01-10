@@ -165,7 +165,7 @@ public class ImagesPublicationsHandler implements RequestHandler<S3Event,String>
 
 
         // Création de l'image redimensionnée
-        BufferedImage resizedImage = new BufferedImage(targetWidth, targetHeight, BufferedImage.TYPE_INT_RGB);
+        BufferedImage resizedImage = new BufferedImage(targetWidth, targetHeight, BufferedImage.TYPE_INT_ARGB);
         Graphics2D g = resizedImage.createGraphics();
 
         try {
