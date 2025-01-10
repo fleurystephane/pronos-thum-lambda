@@ -9,27 +9,21 @@ import jakarta.ws.rs.client.*;
 import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
 import net.coobird.thumbnailator.Thumbnails;
-import org.jcodec.api.FrameGrab;
-import org.jcodec.api.JCodecException;
-import org.jcodec.common.io.ByteBufferSeekableByteChannel;
-import org.jcodec.common.io.FileChannelWrapper;
-import org.jcodec.common.io.NIOUtils;
-import org.jcodec.common.model.Picture;
-import org.jcodec.scale.AWTUtil;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 import software.amazon.awssdk.core.sync.RequestBody;
 import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.s3.model.*;
 import software.amazon.awssdk.services.s3.waiters.S3Waiter;
 
-
 import javax.imageio.ImageIO;
 import java.awt.*;
 import java.awt.image.BufferedImage;
-import java.io.*;
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
 import java.net.URL;
-import java.nio.ByteBuffer;
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.Date;
@@ -37,7 +31,7 @@ import java.util.UUID;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-import static com.pronos.s3.CommonUtility.*;
+import static com.pronos.s3.CommonUtility.bufferedImageToByteArray;
 
 public class ImagesPublicationsHandler implements RequestHandler<S3Event,String> {
     private static final String BUCKETNAME_DESTINATION = System.getenv("BUCKETNAME_DESTINATION");
@@ -45,6 +39,9 @@ public class ImagesPublicationsHandler implements RequestHandler<S3Event,String>
     static String EMAIL_TEC = "tecnical@example.com";
     public static final String PUBLIC_READ = "public-read";
     private static final boolean CALL_API = Boolean.parseBoolean(System.getenv("CALL_API"));
+
+    private static final Logger logger = LogManager.getLogger(ImagesPublicationsHandler.class);
+
 
     public static String generateToken(String email, String userAgent){
         return JWT.create()
@@ -62,25 +59,24 @@ public class ImagesPublicationsHandler implements RequestHandler<S3Event,String>
         String fileExtension = fileName.substring(fileName.lastIndexOf('.') + 1);
         ExtractedInfo infos = extractInfosFromFilenameNew(fileName);
         if (null == infos) {
-            callInfos(ERROR_A, false,
-                    context);
+            callInfos(ERROR_A, false);
             return ERROR_A;
         }
-        context.getLogger().log("id recupéré pour le nouveau media : " + infos.idExtracted);
+        logger.info("id recupéré pour le nouveau media : " + infos.idExtracted);
 
         try {
-            PicturesURLs picturesURLs = getInfosToCall(s3Event, context, infos, fileName, fileExtension);
-            callInfos(picturesURLs.toString(), true, context);
+            PicturesURLs picturesURLs = getInfosToCall(s3Event, infos, fileName, fileExtension);
+            callInfos(picturesURLs.toString(), true);
             return getJsonKeysString(picturesURLs, infos.width, infos.height);
         }catch(IOException e){
-            callInfos("IOException : " + e.getMessage(), false, context);
+            callInfos("IOException : " + e.getMessage(), false);
             return "Error while reading file from S3 :::" + e.getMessage();
         }
 
     }
 
-    private PicturesURLs getInfosToCallForVideo(S3Event s3Event, Context context, ExtractedInfo infos,
-                                        String fileName, String fileExtension) throws IOException {
+    private PicturesURLs getInfosToCallForVideo(S3Event s3Event, ExtractedInfo infos,
+                                        String fileName, String fileExtension) {
         String bucketName = s3Event.getRecords().get(0).getS3().getBucket().getName();
 
         PicturesURLs picturesURLs = new PicturesURLs();
@@ -88,24 +84,9 @@ public class ImagesPublicationsHandler implements RequestHandler<S3Event,String>
         String newKeyOrigin = getNewKey(infos.idExtracted, fileExtension, "");
 
         S3Client s3client = S3Client.builder().build();
-        InputStream inputStream = getObject(s3client, bucketName, fileName);
-        context.getLogger().log("Video " + fileName + " bien récupéré depuis " + bucketName);
-
-        BufferedImage imageOrigin = null;
-
-        //On crée l'image de la vidéo, cette image ne sera pas envoyée à l'appli via API mais sera stockée dans le Bucket
-        /*try {
-                    manageVideo(context, inputStream, fileName, s3client, infos, picturesURLs, fileExtension, newKeyOrigin);
-                } catch (JCodecException e) {
-                    context.getLogger().log("Error JCodeException : "+e.getMessage());
-                    removeObject(context, bucketName, fileName, s3client);
-                    callInfos("Error... JCodecException "+e.getMessage(), false, context);
-                    return "Error... JCodecException";
-                }*/
         if (!infos.isPublic) {
             picturesURLs.setKeyblurred("DEFAULT_URL");
         }
-
 
         //4. Copie de la video d'origine vers le bucket destination
 
@@ -133,23 +114,22 @@ public class ImagesPublicationsHandler implements RequestHandler<S3Event,String>
                 Response resultat = callRestService(infos, picturesURLs);
 
                 if (resultat.getStatus() != Response.Status.OK.getStatusCode()) {
-                    context.getLogger().log("Attention retour du service des Keys : " + resultat.getStatus());
+                    logger.info("Attention retour du service des Keys : " + resultat.getStatus());
                 } else {
-                    context.getLogger().log("Service des keys retour OK  !!!");
+                    logger.info("Service des keys retour OK  !!!");
                     //6. Suppression de l'image du bucket d'origine
-                    removeObject(context, bucketName, fileName, s3client);
+                    removeObject(bucketName, fileName, s3client);
                 }
             }
         } else {
-            context.getLogger().log("/!\\ les etags de la copie de la video sont differents donc pas d'appel API pour mise à jour des keys!!!!");
-            context.getLogger().log("s3client.headObject(sourceHeadRequest).eTag() = " + s3client.headObject(sourceHeadRequest).eTag());
-            context.getLogger().log("copyObjectResponse.copyObjectResult().eTag() = " + copyObjectResponse.copyObjectResult().eTag());
+            logger.info("/!\\ les etags de la copie de la video sont differents donc pas d'appel API pour mise à jour des keys!!!!");
+            logger.info("s3client.headObject(sourceHeadRequest).eTag() = " + s3client.headObject(sourceHeadRequest).eTag());
+            logger.info("copyObjectResponse.copyObjectResult().eTag() = " + copyObjectResponse.copyObjectResult().eTag());
         }
         return picturesURLs;
     }
 
-    public BufferedImage resizeImage(InputStream inputStream, int targetWidth,
-                                     Context context) throws IOException {
+    public BufferedImage resizeImage(InputStream inputStream, int targetWidth) throws IOException {
         // Charger l'image d'origine
         BufferedImage originalImage = ImageIO.read(inputStream);
         if (originalImage == null) {
@@ -180,7 +160,7 @@ public class ImagesPublicationsHandler implements RequestHandler<S3Event,String>
     }
 
 
-    private PicturesURLs getInfosToCallForPicture(S3Event s3Event, Context context, ExtractedInfo infos,
+    private PicturesURLs getInfosToCallForPicture(S3Event s3Event, ExtractedInfo infos,
                                         String fileName, String fileExtension) throws IOException {
         String bucketName = s3Event.getRecords().get(0).getS3().getBucket().getName();
 
@@ -190,9 +170,9 @@ public class ImagesPublicationsHandler implements RequestHandler<S3Event,String>
 
         S3Client s3client = S3Client.builder().build();
         InputStream inputStream = getObject(s3client, bucketName, fileName);
-        context.getLogger().log("Image " + fileName + " bien récupérée depuis " + bucketName);
+        logger.info("Image " + fileName + " bien récupérée depuis " + bucketName);
 
-        BufferedImage imageOrigin = resizeImage(inputStream, 1170, context);
+        BufferedImage imageOrigin = resizeImage(inputStream, 1170);
         inputStream.close();
         infos.width = 1170;
         infos.height = imageOrigin.getHeight();
@@ -202,9 +182,9 @@ public class ImagesPublicationsHandler implements RequestHandler<S3Event,String>
         if (infos.isFirstImage) {
             String key = getNewKey(infos.idExtracted, fileExtension,
                     "thumb");
-            String keyThumb = buildKeyThumb(context, fileName, s3client, imageOrigin, key);
+            String keyThumb = buildKeyThumb(fileName, s3client, imageOrigin, key);
 
-            context.getLogger().log("Vignette créée : " + keyThumb);
+            logger.info("Vignette créée : " + keyThumb);
             picturesURLs.setKeythumb(keyThumb);
         }
 
@@ -212,35 +192,35 @@ public class ImagesPublicationsHandler implements RequestHandler<S3Event,String>
             //2. Creation de l'image floutée
             BufferedImage imageBlurred = CommonUtility.getBufferedImageFlou(imageOrigin);
 
-            String keyLocked = buildImgFlouttee(context, fileExtension, s3client,
+            String keyLocked = buildImgFlouttee(fileExtension, s3client,
                     imageBlurred, getNewKey(infos.idExtracted, fileExtension, "locked"));
-            context.getLogger().log("Image flouttée créée : " + keyLocked);
+            logger.info("Image flouttée créée : " + keyLocked);
             picturesURLs.setKeyblurred(keyLocked);
 
             if (infos.isFirstImage) {
                 //3. Creation de la vignette de l'image flouttée
-                String keyThumbLocked = buildKeyThumb(context, fileName, s3client, imageOrigin,
+                String keyThumbLocked = buildKeyThumb(fileName, s3client, imageOrigin,
                         getNewKey(infos.idExtracted, fileExtension,
                                 "thumblocked"));
-                context.getLogger().log("Vignette flouttée créée : " + keyThumbLocked);
+                logger.info("Vignette flouttée créée : " + keyThumbLocked);
                 picturesURLs.setKeyblurredthumb(keyThumbLocked);
             }
         }
 
         picturesURLs.setKeyorigin(fileName.substring(0, fileName.lastIndexOf(".")));
         picturesURLs.setNewkeyorigin(saveImageToS3(s3client, newKeyOrigin,
-                convertBufferedImageToByteArray(imageOrigin, fileExtension), context));
+                convertBufferedImageToByteArray(imageOrigin, fileExtension)));
 
         if (CALL_API) {
             Response resultat = callRestService(infos, picturesURLs);
 
             if (resultat.getStatus() != Response.Status.OK.getStatusCode()) {
-                context.getLogger().log("Attention retour du service des Keys : " + resultat.getStatus());
+                logger.info("Attention retour du service des Keys : " + resultat.getStatus());
             } else {
-                context.getLogger().log("Service des keys retour OK  !!!");
-                context.getLogger().log("le fichier d'origine : "+fileName);
+                logger.info("Service des keys retour OK  !!!");
+                logger.info("le fichier d'origine : "+fileName);
                 //6. Suppression de l'image du bucket d'origine
-                //removeObject(context, bucketName, fileName, s3client);
+                removeObject(bucketName, fileName, s3client);
 
             }
         }
@@ -255,19 +235,15 @@ public class ImagesPublicationsHandler implements RequestHandler<S3Event,String>
         return baos.toByteArray();
     }
 
-    private PicturesURLs getInfosToCall(S3Event s3Event, Context context, ExtractedInfo infos,
+    private PicturesURLs getInfosToCall(S3Event s3Event, ExtractedInfo infos,
                                         String fileName, String fileExtension) throws IOException {
         if(isVideo(fileExtension)){
-            return getInfosToCallForVideo(s3Event,context,infos,fileName,fileExtension);
+            return getInfosToCallForVideo(s3Event,infos,fileName,fileExtension);
         }
-        return getInfosToCallForPicture(s3Event,context,infos,fileName,fileExtension);
+        return getInfosToCallForPicture(s3Event, infos,fileName,fileExtension);
     }
 
-    private boolean isContentExMedia(String fileName) {
-        return false;
-    }
-
-    private void callInfos(String message, boolean isOk, Context context) {
+    private void callInfos(String message, boolean isOk) {
         Client client = ClientBuilder.newClient();
         WebTarget webTarget
                 = client.target(System.getenv("API_URL_CONTEXT"));
@@ -282,11 +258,11 @@ public class ImagesPublicationsHandler implements RequestHandler<S3Event,String>
         Response response = invocationBuilder
                 .post(Entity.entity(getJsonInfosCallString(message, isOk), MediaType.APPLICATION_JSON));
         if(response.getStatus() == 500){
-            context.getLogger().log("Erreur 500 sur infosstored");
+            logger.error("Erreur 500 sur infosstored");
         }
     }
 
-    private static void removeObject(Context context, String bucketName, String fileName, S3Client s3client) {
+    private static void removeObject(String bucketName, String fileName, S3Client s3client) {
         DeleteObjectRequest deleteObjectRequest = DeleteObjectRequest.builder()
                 .bucket(bucketName)
                 .key(fileName)
@@ -294,9 +270,9 @@ public class ImagesPublicationsHandler implements RequestHandler<S3Event,String>
 
         try {
             s3client.deleteObject(deleteObjectRequest);
-            context.getLogger().log("Objet supprimé avec succès : " + fileName);
+            logger.info("Objet supprimé avec succès : " + fileName);
         } catch (S3Exception s3Exception) {
-            context.getLogger().log("ECHEC de suppression de  " + fileName);
+            logger.error("ECHEC de suppression de  " + fileName);
         }
     }
 
@@ -366,13 +342,13 @@ public class ImagesPublicationsHandler implements RequestHandler<S3Event,String>
         return baseName+"thumblocked.jpg";
     }*/
 
-    private String buildKeyThumb(Context context, String fileName, S3Client s3client, BufferedImage originalImage, String key) throws IOException {
+    private String buildKeyThumb(String fileName, S3Client s3client, BufferedImage originalImage, String key) throws IOException {
         // 1. Création de la vignette à partir de l'image d'origine
-        context.getLogger().log("Création d'une vignette pour " + fileName);
+        logger.info("Création d'une vignette pour " + fileName);
 
         // Créer une vignette de l'image
         BufferedImage thumbnailImage = createSizedBufferedImage(originalImage, 100, 100);
-        context.getLogger().log("Thumbnail bien créé");
+        logger.info("Thumbnail bien créé");
 
         // Convertir la vignette en tableau d'octets
         ByteArrayOutputStream baos = new ByteArrayOutputStream();
@@ -380,19 +356,19 @@ public class ImagesPublicationsHandler implements RequestHandler<S3Event,String>
         byte[] imgThumbnailBytesArray = baos.toByteArray();
 
         // Sauvegarder la vignette dans S3
-        context.getLogger().log("Tentative de sauvegarde dans le bucket " + BUCKETNAME_DESTINATION);
+        logger.info("Tentative de sauvegarde dans le bucket " + BUCKETNAME_DESTINATION);
 
-        return saveImageToS3(s3client, key, imgThumbnailBytesArray, context);
+        return saveImageToS3(s3client, key, imgThumbnailBytesArray);
     }
 
 
-    private String buildImgFlouttee(Context context, String imgExtension, S3Client s3client,
+    private String buildImgFlouttee(String imgExtension, S3Client s3client,
                                     BufferedImage imageBlurred, String key) throws IOException {
         return saveImageToS3(
                 s3client,
                 key,
                 bufferedImageToByteArray(imageBlurred,
-                        imgExtension), context
+                        imgExtension)
         );
     }
 
@@ -424,7 +400,7 @@ public class ImagesPublicationsHandler implements RequestHandler<S3Event,String>
     }
 
     private static String getJsonKeysString(PicturesURLs urLs,int width,int height) {
-        String json = "{\"keyorigin\":\"" +
+        return "{\"keyorigin\":\"" +
                 urLs.getKeyorigin() + "\"," +
                 "\"newkeyorigin\":\"" +
                 urLs.getNewkeyorigin() + "\"," +
@@ -433,7 +409,6 @@ public class ImagesPublicationsHandler implements RequestHandler<S3Event,String>
                 "\"keyblurredthumb\":\"" + urLs.getKeyblurredthumb() + "\"," +
                 "\"width\":"+width +"," +
                 "\"height\":"+height+"}";
-        return json;
     }
 
     private static String getJsonInfosCallString(String message, boolean ok){
@@ -492,7 +467,7 @@ public class ImagesPublicationsHandler implements RequestHandler<S3Event,String>
     // Méthode pour sauvegarder une image dans S3
     private String saveImageToS3(S3Client s3Client,
                                  String newImageKey,
-                                 byte[] bytes, Context context) throws IOException {
+                                 byte[] bytes) throws IOException {
         PutObjectRequest request = PutObjectRequest.builder()
                 .bucket(ImagesPublicationsHandler.BUCKETNAME_DESTINATION)
                 .key(newImageKey)
