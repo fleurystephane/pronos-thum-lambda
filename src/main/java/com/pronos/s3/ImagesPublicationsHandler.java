@@ -40,7 +40,7 @@ public class ImagesPublicationsHandler implements RequestHandler<S3Event,String>
     public static final String PUBLIC_READ = "public-read";
     private static final boolean CALL_API = Boolean.parseBoolean(System.getenv("CALL_API"));
 
-    private static final Logger logger = LogManager.getLogger(ImagesPublicationsHandler.class);
+    //private static final Logger logger = LogManager.getLogger(ImagesPublicationsHandler.class);
 
 
     public static String generateToken(String email, String userAgent){
@@ -62,7 +62,7 @@ public class ImagesPublicationsHandler implements RequestHandler<S3Event,String>
             callInfos(ERROR_A, false);
             return ERROR_A;
         }
-        logger.info("id recupéré pour le nouveau media : " + infos.idExtracted);
+        System.out.println("id recupéré pour le nouveau media : " + infos.idExtracted);
 
         try {
             PicturesURLs picturesURLs = getInfosToCall(s3Event, infos, fileName, fileExtension);
@@ -114,17 +114,17 @@ public class ImagesPublicationsHandler implements RequestHandler<S3Event,String>
                 Response resultat = callRestService(infos, picturesURLs);
 
                 if (resultat.getStatus() != Response.Status.OK.getStatusCode()) {
-                    logger.info("Attention retour du service des Keys : " + resultat.getStatus());
+                    System.out.println("Attention retour du service des Keys : " + resultat.getStatus());
                 } else {
-                    logger.info("Service des keys retour OK  !!!");
+                    System.out.println("Service des keys retour OK  !!!");
                     //6. Suppression de l'image du bucket d'origine
                     removeObject(bucketName, fileName, s3client);
                 }
             }
         } else {
-            logger.info("/!\\ les etags de la copie de la video sont differents donc pas d'appel API pour mise à jour des keys!!!!");
-            logger.info("s3client.headObject(sourceHeadRequest).eTag() = " + s3client.headObject(sourceHeadRequest).eTag());
-            logger.info("copyObjectResponse.copyObjectResult().eTag() = " + copyObjectResponse.copyObjectResult().eTag());
+            System.out.println("/!\\ les etags de la copie de la video sont differents donc pas d'appel API pour mise à jour des keys!!!!");
+            System.out.println("s3client.headObject(sourceHeadRequest).eTag() = " + s3client.headObject(sourceHeadRequest).eTag());
+            System.out.println("copyObjectResponse.copyObjectResult().eTag() = " + copyObjectResponse.copyObjectResult().eTag());
         }
         return picturesURLs;
     }
@@ -145,7 +145,7 @@ public class ImagesPublicationsHandler implements RequestHandler<S3Event,String>
 
 
         // Création de l'image redimensionnée
-        BufferedImage resizedImage = new BufferedImage(targetWidth, targetHeight, BufferedImage.TYPE_INT_ARGB);
+        BufferedImage resizedImage = new BufferedImage(targetWidth, targetHeight, BufferedImage.TYPE_INT_RGB);
         Graphics2D g = resizedImage.createGraphics();
 
         try {
@@ -170,9 +170,10 @@ public class ImagesPublicationsHandler implements RequestHandler<S3Event,String>
 
         S3Client s3client = S3Client.builder().build();
         InputStream inputStream = getObject(s3client, bucketName, fileName);
-        logger.info("Image " + fileName + " bien récupérée depuis " + bucketName);
+        System.out.println("Image " + fileName + " bien récupérée depuis " + bucketName);
 
         BufferedImage imageOrigin = resizeImage(inputStream, 1170);
+        System.out.println("ResizeImage ok");
         inputStream.close();
         infos.width = 1170;
         infos.height = imageOrigin.getHeight();
@@ -182,9 +183,10 @@ public class ImagesPublicationsHandler implements RequestHandler<S3Event,String>
         if (infos.isFirstImage) {
             String key = getNewKey(infos.idExtracted, fileExtension,
                     "thumb");
+            System.out.println("buidKeyThumb...");
             String keyThumb = buildKeyThumb(fileName, s3client, imageOrigin, key);
 
-            logger.info("Vignette créée : " + keyThumb);
+            System.out.println("Vignette créée : " + keyThumb);
             picturesURLs.setKeythumb(keyThumb);
         }
 
@@ -194,7 +196,7 @@ public class ImagesPublicationsHandler implements RequestHandler<S3Event,String>
 
             String keyLocked = buildImgFlouttee(fileExtension, s3client,
                     imageBlurred, getNewKey(infos.idExtracted, fileExtension, "locked"));
-            logger.info("Image flouttée créée : " + keyLocked);
+            System.out.println("Image flouttée créée : " + keyLocked);
             picturesURLs.setKeyblurred(keyLocked);
 
             if (infos.isFirstImage) {
@@ -202,7 +204,7 @@ public class ImagesPublicationsHandler implements RequestHandler<S3Event,String>
                 String keyThumbLocked = buildKeyThumb(fileName, s3client, imageOrigin,
                         getNewKey(infos.idExtracted, fileExtension,
                                 "thumblocked"));
-                logger.info("Vignette flouttée créée : " + keyThumbLocked);
+                System.out.println("Vignette flouttée créée : " + keyThumbLocked);
                 picturesURLs.setKeyblurredthumb(keyThumbLocked);
             }
         }
@@ -215,10 +217,10 @@ public class ImagesPublicationsHandler implements RequestHandler<S3Event,String>
             Response resultat = callRestService(infos, picturesURLs);
 
             if (resultat.getStatus() != Response.Status.OK.getStatusCode()) {
-                logger.info("Attention retour du service des Keys : " + resultat.getStatus());
+                System.out.println("Attention retour du service des Keys : " + resultat.getStatus());
             } else {
-                logger.info("Service des keys retour OK  !!!");
-                logger.info("le fichier d'origine : "+fileName);
+                System.out.println("Service des keys retour OK  !!!");
+                System.out.println("le fichier d'origine : "+fileName);
                 //6. Suppression de l'image du bucket d'origine
                 removeObject(bucketName, fileName, s3client);
 
@@ -258,7 +260,7 @@ public class ImagesPublicationsHandler implements RequestHandler<S3Event,String>
         Response response = invocationBuilder
                 .post(Entity.entity(getJsonInfosCallString(message, isOk), MediaType.APPLICATION_JSON));
         if(response.getStatus() == 500){
-            logger.error("Erreur 500 sur infosstored");
+            System.out.println("Erreur 500 sur infosstored");
         }
     }
 
@@ -270,9 +272,9 @@ public class ImagesPublicationsHandler implements RequestHandler<S3Event,String>
 
         try {
             s3client.deleteObject(deleteObjectRequest);
-            logger.info("Objet supprimé avec succès : " + fileName);
+            System.out.println("Objet supprimé avec succès : " + fileName);
         } catch (S3Exception s3Exception) {
-            logger.error("ECHEC de suppression de  " + fileName);
+            System.out.println("ECHEC de suppression de  " + fileName);
         }
     }
 
@@ -344,11 +346,11 @@ public class ImagesPublicationsHandler implements RequestHandler<S3Event,String>
 
     private String buildKeyThumb(String fileName, S3Client s3client, BufferedImage originalImage, String key) throws IOException {
         // 1. Création de la vignette à partir de l'image d'origine
-        logger.info("Création d'une vignette pour " + fileName);
+        System.out.println("Création d'une vignette pour " + fileName);
 
         // Créer une vignette de l'image
         BufferedImage thumbnailImage = createSizedBufferedImage(originalImage, 100, 100);
-        logger.info("Thumbnail bien créé");
+        System.out.println("Thumbnail bien créé");
 
         // Convertir la vignette en tableau d'octets
         ByteArrayOutputStream baos = new ByteArrayOutputStream();
@@ -356,7 +358,7 @@ public class ImagesPublicationsHandler implements RequestHandler<S3Event,String>
         byte[] imgThumbnailBytesArray = baos.toByteArray();
 
         // Sauvegarder la vignette dans S3
-        logger.info("Tentative de sauvegarde dans le bucket " + BUCKETNAME_DESTINATION);
+        System.out.println("Tentative de sauvegarde dans le bucket " + BUCKETNAME_DESTINATION);
 
         return saveImageToS3(s3client, key, imgThumbnailBytesArray);
     }

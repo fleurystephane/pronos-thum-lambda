@@ -165,7 +165,7 @@ public class CommonUtility {
             javax.imageio.ImageIO.write(image, extension, baos);
             return baos.toByteArray();
         } catch (IOException e) {
-            e.printStackTrace();
+            System.out.println("ERROR : IOException dans bufferedImageToByteArray : "+e.getMessage());
             return null;
         }
     }

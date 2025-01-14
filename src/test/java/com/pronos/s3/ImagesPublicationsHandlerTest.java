@@ -31,7 +31,7 @@ class ImagesPublicationsHandlerTest {
     @Test
     void testnewKey(){
         ImagesPublicationsHandler handler = new ImagesPublicationsHandler();
-        ImagesPublicationsHandler.ExtractedInfo info1 = handler.extractInfosFromFilenameNew("950d9a44-004e-47d4-ba07-f8586e2fceb2-107-PUB");
+        ImagesPublicationsHandler.ExtractedInfo info1 = handler.extractInfosFromFilenameNew("950d9a44-004e-47d4-ba07-f8586e2fceb2-P107-PUB");
         assertEquals("107", info1.idExtracted);
         assertTrue(info1.isPublic);
     }
