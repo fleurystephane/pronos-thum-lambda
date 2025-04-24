@@ -20,7 +20,7 @@ public class S3ObjectBucketDeletionHandler implements RequestHandler<S3Event,Str
     @Override
     public String handleRequest(S3Event s3Event, Context context) {
         DefaultCredentialsProvider credentialsProvider = DefaultCredentialsProvider.create();
-        Region region = Region.EU_WEST_3; // Change to your desired region
+        Region region = Region.EU_WEST_3;
 
         // Create S3 client
         S3Client s3Client = S3Client.builder()

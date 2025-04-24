@@ -21,10 +21,14 @@ class ImagesPublicationsHandlerTest {
     void callRestService() {
         ImagesPublicationsHandler handler = new ImagesPublicationsHandler();
         ImagesPublicationsHandler.ExtractedInfo infos = handler.extractInfosFromFilenameNew("950d9a44-004e-47d4-ba07-f8586e2fceb2-P107-PUB");
-        Response response = handler.callRestService(
-                infos,
-                new PicturesURLs("A", "Aprime","B", "C", "D")
-        );
+        try {
+            handler.callRestService(
+                    infos,
+                    new PicturesURLs("A", "Aprime","B", "C", "D")
+            );
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
         //Assertions.assertEquals(200, response.getStatus());
     }
 

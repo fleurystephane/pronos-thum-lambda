@@ -135,8 +135,6 @@ public class CommonUtility {
         ConvolveOp convolve = new ConvolveOp(kernel);
         BufferedImage blurredImage = convolve.filter(image, null);
         blurredImage = convolve.filter(blurredImage, null);
-        //blurredImage = convolve.filter(blurredImage, null);
-        //blurredImage = convolve.filter(blurredImage, null);
         return blurredImage;
     }
 

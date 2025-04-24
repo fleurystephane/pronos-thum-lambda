@@ -9,8 +9,6 @@ import jakarta.ws.rs.client.*;
 import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
 import net.coobird.thumbnailator.Thumbnails;
-import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.Logger;
 import software.amazon.awssdk.core.sync.RequestBody;
 import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.s3.model.*;
@@ -27,6 +25,7 @@ import java.net.URL;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.Date;
+import java.util.Map;
 import java.util.UUID;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -40,17 +39,18 @@ public class ImagesPublicationsHandler implements RequestHandler<S3Event,String>
     public static final String PUBLIC_READ = "public-read";
     private static final boolean CALL_API = Boolean.parseBoolean(System.getenv("CALL_API"));
 
-    //private static final Logger logger = LogManager.getLogger(ImagesPublicationsHandler.class);
+    private static final String REGION = System.getenv("REGION");
 
-
-    public static String generateToken(String email, String userAgent){
+    public static String generateToken(String email, String userAgent) throws Exception {
+        Map<String, String> creds = SecretsFetcher.getSecrets("lazonio/allsecrets", REGION);
+        String secretKey = creds.get("jwtsecretkey");
         return JWT.create()
                 .withClaim("email", email)
                 .withClaim("user-agent", userAgent)
                 .withIssuer(System.getenv("ISSUER"))
                 .withSubject(email)
                 .withExpiresAt(Date.from(Instant.now().plus(30, ChronoUnit.DAYS)))
-                .sign(Algorithm.HMAC256(System.getenv("SECRETKEY")));
+                .sign(Algorithm.HMAC256(secretKey));
     }
 
     @Override
@@ -59,24 +59,32 @@ public class ImagesPublicationsHandler implements RequestHandler<S3Event,String>
         String fileExtension = fileName.substring(fileName.lastIndexOf('.') + 1);
         ExtractedInfo infos = extractInfosFromFilenameNew(fileName);
         if (null == infos) {
-            callInfos(ERROR_A, false);
+            try {
+                callInfos(ERROR_A, false);
+            } catch (Exception e) {
+                throw new RuntimeException(e);
+            }
             return ERROR_A;
         }
         System.out.println("id recupéré pour le nouveau media : " + infos.idExtracted);
 
         try {
-            PicturesURLs picturesURLs = getInfosToCall(s3Event, infos, fileName, fileExtension);
-            callInfos(picturesURLs.toString(), true);
-            return getJsonKeysString(picturesURLs, infos.width, infos.height);
-        }catch(IOException e){
-            callInfos("IOException : " + e.getMessage(), false);
-            return "Error while reading file from S3 :::" + e.getMessage();
+            try {
+                PicturesURLs picturesURLs = getInfosToCall(s3Event, infos, fileName, fileExtension);
+                callInfos(picturesURLs.toString(), true);
+                return getJsonKeysString(picturesURLs, infos.width, infos.height);
+            } catch (IOException e) {
+                callInfos("IOException : " + e.getMessage(), false);
+                return "Error while reading file from S3 :::" + e.getMessage();
+            }
+        }catch (Exception e) {
+            throw new RuntimeException(e);
         }
 
     }
 
     private PicturesURLs getInfosToCallForVideo(S3Event s3Event, ExtractedInfo infos,
-                                        String fileName, String fileExtension) {
+                                        String fileName, String fileExtension) throws Exception {
         String bucketName = s3Event.getRecords().get(0).getS3().getBucket().getName();
 
         PicturesURLs picturesURLs = new PicturesURLs();
@@ -161,7 +169,7 @@ public class ImagesPublicationsHandler implements RequestHandler<S3Event,String>
 
 
     private PicturesURLs getInfosToCallForPicture(S3Event s3Event, ExtractedInfo infos,
-                                        String fileName, String fileExtension) throws IOException {
+                                        String fileName, String fileExtension) throws Exception {
         String bucketName = s3Event.getRecords().get(0).getS3().getBucket().getName();
 
         PicturesURLs picturesURLs = new PicturesURLs();
@@ -201,7 +209,7 @@ public class ImagesPublicationsHandler implements RequestHandler<S3Event,String>
 
             if (infos.isFirstImage) {
                 //3. Creation de la vignette de l'image flouttée
-                String keyThumbLocked = buildKeyThumb(fileName, s3client, imageOrigin,
+                String keyThumbLocked = buildKeyThumb(fileName, s3client, imageBlurred,
                         getNewKey(infos.idExtracted, fileExtension,
                                 "thumblocked"));
                 System.out.println("Vignette flouttée créée : " + keyThumbLocked);
@@ -238,14 +246,14 @@ public class ImagesPublicationsHandler implements RequestHandler<S3Event,String>
     }
 
     private PicturesURLs getInfosToCall(S3Event s3Event, ExtractedInfo infos,
-                                        String fileName, String fileExtension) throws IOException {
+                                        String fileName, String fileExtension) throws Exception {
         if(isVideo(fileExtension)){
             return getInfosToCallForVideo(s3Event,infos,fileName,fileExtension);
         }
         return getInfosToCallForPicture(s3Event, infos,fileName,fileExtension);
     }
 
-    private void callInfos(String message, boolean isOk) {
+    private void callInfos(String message, boolean isOk) throws Exception {
         Client client = ClientBuilder.newClient();
         WebTarget webTarget
                 = client.target(System.getenv("API_URL_CONTEXT"));
@@ -349,7 +357,7 @@ public class ImagesPublicationsHandler implements RequestHandler<S3Event,String>
         System.out.println("Création d'une vignette pour " + fileName);
 
         // Créer une vignette de l'image
-        BufferedImage thumbnailImage = createSizedBufferedImage(originalImage, 100, 100);
+        BufferedImage thumbnailImage = createSizedBufferedImage(originalImage);
         System.out.println("Thumbnail bien créé");
 
         // Convertir la vignette en tableau d'octets
@@ -382,7 +390,7 @@ public class ImagesPublicationsHandler implements RequestHandler<S3Event,String>
                 imgExtension.equals("wmv");
     }
 
-    public Response callRestService(ExtractedInfo infos, PicturesURLs urLs) {
+    public Response callRestService(ExtractedInfo infos, PicturesURLs urLs) throws Exception {
         Client client = ClientBuilder.newClient();
         WebTarget webTarget
                 = client.target(System.getenv("API_URL_CONTEXT"));
@@ -458,9 +466,9 @@ public class ImagesPublicationsHandler implements RequestHandler<S3Event,String>
                 .toOutputStream(outputStream);
         return new ByteArrayInputStream(outputStream.toByteArray());
     }
-    private static BufferedImage createSizedBufferedImage(BufferedImage originalImage, int width, int height) throws IOException {
+    private static BufferedImage createSizedBufferedImage(BufferedImage originalImage) throws IOException {
         return Thumbnails.of(originalImage)
-                .size(width, height)
+                .size(400, originalImage.getHeight()*400/originalImage.getWidth())
                 .asBufferedImage();
     }
 
